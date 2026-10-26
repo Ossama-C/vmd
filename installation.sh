@@ -1,59 +1,66 @@
-#!/bin/bash
+#!/usr/bin/env bash
+set -eu
 
 echo "============================"
-echo "    Installing vmd VCS      "
+echo "      Installing vmd        "
 echo "============================"
 
-# 1. Create the required directory structure
-echo "[1/4] Creating directories..."
-mkdir -p "$HOME/vmd/bin"
-mkdir -p "$HOME/vmd/projects"
+# Work from the source directory and install under ~/.local by default.
+SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(dirname "$SRC_DIR")"
+PREFIX="${PREFIX:-$HOME/.local}"
 
-# 2. Compile the source code
-echo "[2/4] Compiling source files..."
-if ! command -v gcc &> /dev/null; then
-    echo "Error: gcc is not installed. Please install a C compiler first."
+# Pick a compiler from CC or the usual system names.
+CC="${CC:-}"
+if [ -z "$CC" ]; then
+    for candidate in cc gcc clang; do
+        if command -v "$candidate" >/dev/null 2>&1; then
+            CC="$candidate"
+            break
+        fi
+    done
+fi
+if [ -z "$CC" ]; then
+    echo "Error: no C compiler found. Install gcc or clang first." >&2
     exit 1
 fi
 
-gcc *.c -o vmd
-if [ $? -ne 0 ]; then
-    echo "Error: Compilation failed!"
-    exit 1
-fi
+# Build the binary into vmd-bin/ next to the source tree.
+echo "[1/3] Building..."
+mkdir -p "$ROOT/vmd-bin"
+"$CC" -std=c11 -O2 -Wall -Wextra \
+    -D_XOPEN_SOURCE=700 -D_DEFAULT_SOURCE \
+    "$SRC_DIR"/*.c -o "$ROOT/vmd-bin/vmd"
 
-# 3. Move the compiled binary to ~/vmd/bin
-echo "[3/4] Installing binary..."
-mv vmd "$HOME/vmd/bin/"
-chmod +x "$HOME/vmd/bin/vmd"
+# Install the executable into PREFIX/bin.
+echo "[2/3] Installing to $PREFIX/bin..."
+mkdir -p "$PREFIX/bin"
+install -m 755 "$ROOT/vmd-bin/vmd" "$PREFIX/bin/vmd"
 
-# 4. Add ~/vmd/bin to PATH
-echo "[4/4] Configuring PATH..."
-BIN_PATH="$HOME/vmd/bin"
+# Add PREFIX/bin to the user's shell startup file when possible.
+echo "[3/3] Configuring PATH..."
+BIN_PATH="$PREFIX/bin"
 SHELL_RC=""
 
-if [[ "$SHELL" == */zsh ]]; then
-    SHELL_RC="$HOME/.zshrc"
-elif [[ "$SHELL" == */bash ]]; then
-    SHELL_RC="$HOME/.bashrc"
-fi
+case "${SHELL:-}" in
+    */zsh) SHELL_RC="$HOME/.zshrc" ;;
+    */bash) SHELL_RC="$HOME/.bashrc" ;;
+esac
 
 if [ -n "$SHELL_RC" ]; then
-    if ! grep -q "$BIN_PATH" "$SHELL_RC"; then
-        echo "" >> "$SHELL_RC"
-        echo "# Added by vmd installer" >> "$SHELL_RC"
-        echo "export PATH=\"\$PATH:$BIN_PATH\"" >> "$SHELL_RC"
+    if ! grep -Fq "$BIN_PATH" "$SHELL_RC" 2>/dev/null; then
+        printf '\n# Added by vmd installer\nexport PATH="$PATH:%s"\n' "$BIN_PATH" >> "$SHELL_RC"
         echo "Added $BIN_PATH to $SHELL_RC"
     else
-        echo "PATH is already configured in $SHELL_RC"
+        echo "$BIN_PATH is already in $SHELL_RC"
     fi
 else
-    echo "Warning: Could not detect shell RC file. Please add $BIN_PATH to your PATH manually."
+    echo "Warning: could not detect your shell RC file."
+    echo "Add $BIN_PATH to your PATH manually."
 fi
 
 echo ""
 echo "=================================================="
-echo " Installation completed successfully!             "
-echo " Please run: source ~/.bashrc (or ~/.zshrc)       "
-echo " Then you can use 'vmd help' from anywhere.       "
+echo " Installation completed successfully!"
+echo " Run: source ${SHELL_RC:-your shell rc} then: vmd help"
 echo "=================================================="

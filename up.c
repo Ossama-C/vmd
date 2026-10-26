@@ -1,70 +1,109 @@
+#define _XOPEN_SOURCE 700
+
+#include <errno.h>
+#include <limits.h>
 #include <stdio.h>
-#include <string.h>
-#include <ctype.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/stat.h>
+#include <unistd.h>
+
+#include "meta.h"
 #include "up.h"
+#include "util.h"
 
-void pup(char *name, char *version){
-    char cmd[200];
-    snprintf(cmd, sizeof(cmd), "mkdir -p ~/vmd/projects/vmd-%s/v%s", name, version);
-    system(cmd);
-    snprintf(cmd, sizeof(cmd), "cp -r . ~/vmd/projects/vmd-%s/v%s", name, version);
-    system(cmd);
-}
-
-int up(char **argv){
-
-    char name[30];
-
-    if(strlen(argv[2]) >= 30){
-        printf("what are you doing my friend this's name or text\n");
-        return 1;
-    }
-    strcpy(name, argv[2]);
-
-    for(int i = 0; name[i] != '\0'; i++){
-        char c = name[i];
-        if(isalnum(c) == 0 && c != '-' && c != '_'){
-            printf("in your project name use only characters , numbers and '-','_'\n");
-            return 1;    
-        }
-    }
-
-    char cmd[200];
-    char path[200];
-    snprintf(path, sizeof(path), "%s/vmd/projects/vmd-%s", getenv("HOME"), name);
+/*
+ * Save the current working directory as the next version of a project.
+ * Copies into a temporary folder, renames it into place, then records metadata.
+ */
+int up(const char *name, const char *message){
+    const char *home = vmd_home();
+    char cwd[PATH_MAX];
+    char cwd_real[PATH_MAX];
+    char project[PATH_MAX];
+    char project_real[PATH_MAX];
+    char temporary[PATH_MAX];
+    char version[PATH_MAX];
     struct stat info;
+    copy_stats stats = {0};
+    int next;
 
-    if(stat(path, &info) == 0){
-        snprintf(cmd, sizeof(cmd), "ls -v %s/vmd/projects/vmd-%s | tail -n 1", getenv("HOME"), name);
-
-        FILE *fp = popen(cmd, "r");
-        if(fp == NULL){
-            printf("error in command\n");
-            return 1;
-        }
-        char lastV[30] = "";
-        fgets(lastV, sizeof(lastV), fp);
-        pclose(fp);
-        lastV[strcspn(lastV, "\n")] = 0;
-
-        int n = 1;
-        
-        if(lastV[0] == 'v' || lastV[0] == 'V'){
-            n = atoi(&lastV[1]);
-            if(n <= 0) n = 1; 
-        }
-
-        char version[30];
-        snprintf(version, sizeof(version), "%d", n + 1);
-
-        pup(name, version);
-
-    } else {
-        printf("the project has not been added\n");
-        printf("use vmd help\n");
+    if(home == NULL){
+        fprintf(stderr, "error: HOME is not set\n");
         return 1;
+    }
+    if(valid_name(name) == 0){
+        fprintf(stderr, "error: invalid project name\n");
+        fprintf(stderr, "use letters, numbers, '-' or '_' (1-%d characters); \"all\" is reserved\n",
+                VMD_NAME_MAX - 1);
+        return 1;
+    }
+    if(getcwd(cwd, sizeof(cwd)) == NULL){
+        perror("getcwd");
+        return 1;
+    }
+    if(build_path(project, sizeof(project), "%s/vmd/projects/vmd-%s", home, name) != 0){
+        fprintf(stderr, "error: path is too long\n");
+        return 1;
+    }
+    if(lstat(project, &info) != 0){
+        fprintf(stderr, "error: project \"%s\" has not been added\n", name);
+        fprintf(stderr, "use \"vmd add %s\" first\n", name);
+        return 1;
+    }
+    if(S_ISDIR(info.st_mode) == 0){
+        fprintf(stderr, "error: %s is not a project directory\n", project);
+        return 1;
+    }
+
+    next = next_version(project);
+    if(next <= 0){
+        perror(project);
+        return 1;
+    }
+    if(build_path(temporary, sizeof(temporary), "%s/.v%d.tmp.XXXXXX", project, next) != 0 ||
+       build_path(version, sizeof(version), "%s/v%d", project, next) != 0){
+        fprintf(stderr, "error: path is too long\n");
+        return 1;
+    }
+
+    if(realpath(cwd, cwd_real) == NULL || realpath(project, project_real) == NULL){
+        perror("realpath");
+        return 1;
+    }
+    if(is_inside(project_real, cwd_real)){
+        fprintf(stderr, "error: the destination is inside the folder you are saving\n");
+        fprintf(stderr, "run \"vmd up\" from a subfolder of your project, not from %s\n", cwd_real);
+        return 1;
+    }
+
+    if(mkdtemp(temporary) == NULL){
+        perror(temporary);
+        return 1;
+    }
+    if(copy_project(cwd, temporary, &stats) != 0){
+        fprintf(stderr, "error: could not copy the project files\n");
+        remove_tree(temporary);
+        return 1;
+    }
+    if(rename(temporary, version) != 0){
+        perror(version);
+        remove_tree(temporary);
+        return 1;
+    }
+
+    if(meta_record(name, next, message, &stats) != 0){
+        fprintf(stderr, "warning: version saved, but the index was not updated\n");
+        fprintf(stderr, "run \"vmd info --rebuild\" to fix it\n");
+    }
+
+    char size[32];
+    human_size(stats.bytes, size, sizeof(size));
+    if(stats.skipped > 0){
+        printf("updated \"%s\" to v%d (%lu files, %s, %lu skipped by .vmdignore)\n",
+               name, next, stats.files, size, stats.skipped);
+    }else{
+        printf("updated \"%s\" to v%d (%lu files, %s)\n", name, next, stats.files, size);
     }
     return 0;
 }

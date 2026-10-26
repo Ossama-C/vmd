@@ -1,97 +1,105 @@
 #include <stdio.h>
 #include <string.h>
-#include <ctype.h>
+
 #include "all.h"
-#include "rm.h"
 
-int main(int argc, char *argv[]){
+/*
+ * Return 1 when two strings are identical.
+ */
+static int same(const char *left, const char *right){
+    return strcmp(left, right) == 0;
+}
 
-    if(argc == 1){
-      printf("something is missing\n");
-      printf("us vmd help\n");
-      return 1;
-    }
-
-    if(strcmp(argv[1], "add") == 0){
-
-       if(argc != 3){
-        printf("invalede command us \nvmd help\n");
-        return 1;
-      }
-      int out = add(argv);
-       if(out == 0){
-        printf("add successful\n");
-       }else{
-        printf("add failed\n");
-        return 1;
-       }
-
-    }else if(strcmp(argv[1], "up") == 0){
-
-      if(argc != 3){
-        printf("invalede command us \nvmd help\n");
-        return 1;
-      }
-      int out = up(argv);
-       if(out == 0){
-        printf("update successful\n");
-       }else{
-        printf("update failed\n");
-        return 1;
-       }
-
-    }else if(strcmp(argv[1], "imp") == 0){
-      if(argc != 5){
-        printf("invalede command us \nvmd help\n");
-        return 1;
-      }      
-       int out = imp(argv);
-       if(out == 0){
-        printf("import successful\n");
-       }else{
-        printf("import failed\n");
-        return 1;
-       }
-
-    }else if(strcmp(argv[1], "list") == 0){
- 
-      if(argc != 2 && argc != 3){
-        printf("invalede command us \nvmd help\n");
-        return 1;
-      }
-      int out = list(argc, argv);
-       if(out != 0){
-        printf("list failed\n");
-        return 1;
-       }
- 
-    }else if(strcmp(argv[1], "rm") == 0){
-
-      if(argc != 3 && argc != 4){
-        printf("invalede command us \nvmd help\n");
-        return 1;
-      }
-      int out = rm(argc, argv);
-       if(out == 0){
-        printf("remove successful\n");
-       }else{
-        printf("remove failed\n");
-        return 1;
-       }
-
-    }else if(strcmp(argv[1], "help") == 0){
-
-       if(argc != 2){
-        printf("invalede command us \nvmd help\n");
-        return 1;
-    }
-      help();
-
+/*
+ * Print a usage error and a hint to run "vmd help".
+ */
+static int usage_error(const char *command){
+    if(command == NULL){
+        fprintf(stderr, "error: something is missing\n");
     }else{
-
-        printf("this command not exacte\nto see list of command us\n vmd help\n");
-        return 1;
+        fprintf(stderr, "error: wrong arguments for \"%s\"\n", command);
     }
-    
-    return 0;
+    fprintf(stderr, "run \"vmd help\" to see the commands\n");
+    return 1;
+}
+
+/*
+ * Parse the command line and dispatch to the matching vmd command.
+ */
+int main(int argc, char *argv[]){
+    const char *command;
+
+    if(argc < 2){
+        return usage_error(NULL);
+    }
+    command = argv[1];
+
+    if(same(command, "help") || same(command, "-h") || same(command, "--help")){
+        if(argc != 2){
+            return usage_error(command);
+        }
+        return help();
+    }
+
+    if(same(command, "version") || same(command, "-v") || same(command, "--version")){
+        if(argc != 2){
+            return usage_error(command);
+        }
+        printf("vmd %s\n", VMD_VERSION);
+        return 0;
+    }
+
+    if(same(command, "add")){
+        if(argc != 3 && argc != 4){
+            return usage_error(command);
+        }
+        return add(argv[2], argc == 4 ? argv[3] : "");
+    }
+
+    if(same(command, "up")){
+        if(argc != 3 && argc != 4){
+            return usage_error(command);
+        }
+        return up(argv[2], argc == 4 ? argv[3] : "");
+    }
+
+    if(same(command, "imp") || same(command, "export")){
+        int version;
+
+        if(argc != 5){
+            return usage_error(command);
+        }
+        version = parse_version(argv[3]);
+        if(version <= 0){
+            fprintf(stderr, "error: the version must be a positive number\n");
+            return 1;
+        }
+        return imp(argv[2], version, argv[4]);
+    }
+
+    if(same(command, "list")){
+        if(argc != 2 && argc != 3){
+            return usage_error(command);
+        }
+        return list(argc, argv);
+    }
+
+    if(same(command, "info") || same(command, "log")){
+        return info(argc, argv);
+    }
+
+    if(same(command, "find") || same(command, "search")){
+        return find(argc, argv);
+    }
+
+    if(same(command, "rm") || same(command, "remove")){
+        if(argc != 3 && argc != 4){
+            return usage_error(command);
+        }
+        return rm(argc, argv);
+    }
+
+    fprintf(stderr, "error: unknown command \"%s\"\n", command);
+    fprintf(stderr, "run \"vmd help\" to see the commands\n");
+    return 1;
 }

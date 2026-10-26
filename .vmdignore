@@ -1,0 +1,4 @@
+# VCS metadata and build output
+.git
+*.o
+vmd
