@@ -1,7 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "all.h"
+#include "vmd.h"
 
 /*
  * Return 1 when two strings are identical.
@@ -24,7 +24,7 @@ static int usage_error(const char *command){
 }
 
 /*
- * Parse the command line and dispatch to the matching vmd command.
+ * Read the command line and call the matching command.
  */
 int main(int argc, char *argv[]){
     const char *command;
@@ -40,7 +40,6 @@ int main(int argc, char *argv[]){
         }
         return help();
     }
-
     if(same(command, "version") || same(command, "-v") || same(command, "--version")){
         if(argc != 2){
             return usage_error(command);
@@ -93,10 +92,23 @@ int main(int argc, char *argv[]){
     }
 
     if(same(command, "rm") || same(command, "remove")){
-        if(argc != 3 && argc != 4){
+        const char *positional[2];
+        int count = 0;
+        int assumed_yes = 0;
+
+        for(int i = 2; i < argc; i++){
+            if(same(argv[i], "-y") || same(argv[i], "--yes")){
+                assumed_yes = 1;
+            }else if(count < 2){
+                positional[count++] = argv[i];
+            }else{
+                return usage_error(command);
+            }
+        }
+        if(count < 1){
             return usage_error(command);
         }
-        return rm(argc, argv);
+        return rm_cmd(count, positional, assumed_yes);
     }
 
     fprintf(stderr, "error: unknown command \"%s\"\n", command);

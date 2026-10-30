@@ -8,14 +8,23 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-#include "add.h"
-#include "meta.h"
-#include "util.h"
+#include "vmd.h"
 
 /*
- * Save the current working directory as version 1 of a project.
- * Creates the storage folders, copies the tree into a temporary folder,
- * renames it into place, then records the version in the index.
+ * Undo a failed first save: remove the project folder when this command
+ * created it and it still has no versions.
+ */
+static void abandon(const char *project, int made_project){
+    if(made_project && next_version(project) == 1){
+        remove_tree(project);
+    }
+}
+
+/*
+ * Save the current folder as version 1 of a project.
+ *
+ * The files are copied into a hidden temporary folder and only renamed to
+ * "v1" when the copy is complete, so a half copy never looks like a version.
  */
 int add(const char *name, const char *message){
     const char *home = vmd_home();
@@ -27,8 +36,9 @@ int add(const char *name, const char *message){
     char temporary[PATH_MAX];
     char version[PATH_MAX];
     struct stat info;
-    copy_stats stats = {0};
+    vmd_stats stats = {0};
     int made_project = 0;
+    char size[32];
 
     if(home == NULL){
         fprintf(stderr, "error: HOME is not set\n");
@@ -57,11 +67,6 @@ int add(const char *name, const char *message){
             fprintf(stderr, "error: %s exists and is not a directory\n", project);
             return 1;
         }
-        if(next_version(project) > 1){
-            fprintf(stderr, "error: project \"%s\" already exists\n", name);
-            fprintf(stderr, "use \"vmd up %s\" to save a new version\n", name);
-            return 1;
-        }
     }else if(errno != ENOENT){
         perror(project);
         return 1;
@@ -70,62 +75,58 @@ int add(const char *name, const char *message){
             perror(projects);
             return 1;
         }
-        if(mkdir(project, 0755) != 0){
+        if(mkdir(project, 0755) == 0){
+            made_project = 1;
+        }else if(errno != EEXIST){
             perror(project);
             return 1;
         }
-        made_project = 1;
     }
 
+    if(next_version(project) > 1){
+        fprintf(stderr, "error: project \"%s\" already exists\n", name);
+        fprintf(stderr, "use \"vmd up %s\" to save a new version\n", name);
+        abandon(project, made_project);
+        return 1;
+    }
     if(realpath(cwd, cwd_real) == NULL || realpath(project, project_real) == NULL){
         perror("realpath");
-        if(made_project){
-            rmdir(project);
-        }
+        abandon(project, made_project);
         return 1;
     }
     if(is_inside(project_real, cwd_real)){
-        fprintf(stderr, "error: the destination is inside the folder you are saving\n");
-        fprintf(stderr, "run \"vmd add\" from a subfolder of your project, not from %s\n", cwd_real);
-        if(made_project){
-            rmdir(project);
-        }
+        fprintf(stderr, "error: the storage folder is inside the folder you are saving\n");
+        fprintf(stderr, "run \"vmd add\" from a subfolder, not from %s\n", cwd_real);
+        abandon(project, made_project);
         return 1;
     }
 
     if(mkdtemp(temporary) == NULL){
         perror(temporary);
-        if(made_project){
-            rmdir(project);
-        }
+        abandon(project, made_project);
         return 1;
     }
     if(copy_project(cwd, temporary, &stats) != 0){
         fprintf(stderr, "error: could not copy the project files\n");
         remove_tree(temporary);
-        if(made_project){
-            rmdir(project);
-        }
+        abandon(project, made_project);
         return 1;
     }
     if(rename(temporary, version) != 0){
         perror(version);
         remove_tree(temporary);
-        if(made_project){
-            rmdir(project);
-        }
+        abandon(project, made_project);
         return 1;
     }
 
     if(meta_record(name, 1, message, &stats) != 0){
-        fprintf(stderr, "warning: version saved, but the index was not updated\n");
+        fprintf(stderr, "warning: v1 was saved, but the index was not updated\n");
         fprintf(stderr, "run \"vmd info --rebuild\" to fix it\n");
     }
 
-    char size[32];
     human_size(stats.bytes, size, sizeof(size));
     if(stats.skipped > 0){
-        printf("added \"%s\" as v1 (%lu files, %s, %lu skipped by .vmdignore)\n",
+        printf("added \"%s\" as v1 (%lu files, %s, %lu skipped)\n",
                name, stats.files, size, stats.skipped);
     }else{
         printf("added \"%s\" as v1 (%lu files, %s)\n", name, stats.files, size);

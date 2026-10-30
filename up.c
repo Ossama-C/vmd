@@ -8,13 +8,13 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-#include "meta.h"
-#include "up.h"
-#include "util.h"
+#include "vmd.h"
 
 /*
- * Save the current working directory as the next version of a project.
- * Copies into a temporary folder, renames it into place, then records metadata.
+ * Save the current folder as the next version of a project.
+ *
+ * The next number is the highest saved version plus one. As in add, the
+ * copy happens in a temporary folder that is renamed to "vN" at the end.
  */
 int up(const char *name, const char *message){
     const char *home = vmd_home();
@@ -25,8 +25,9 @@ int up(const char *name, const char *message){
     char temporary[PATH_MAX];
     char version[PATH_MAX];
     struct stat info;
-    copy_stats stats = {0};
+    vmd_stats stats = {0};
     int next;
+    char size[32];
 
     if(home == NULL){
         fprintf(stderr, "error: HOME is not set\n");
@@ -66,14 +67,13 @@ int up(const char *name, const char *message){
         fprintf(stderr, "error: path is too long\n");
         return 1;
     }
-
     if(realpath(cwd, cwd_real) == NULL || realpath(project, project_real) == NULL){
         perror("realpath");
         return 1;
     }
     if(is_inside(project_real, cwd_real)){
-        fprintf(stderr, "error: the destination is inside the folder you are saving\n");
-        fprintf(stderr, "run \"vmd up\" from a subfolder of your project, not from %s\n", cwd_real);
+        fprintf(stderr, "error: the storage folder is inside the folder you are saving\n");
+        fprintf(stderr, "run \"vmd up\" from a subfolder, not from %s\n", cwd_real);
         return 1;
     }
 
@@ -87,20 +87,25 @@ int up(const char *name, const char *message){
         return 1;
     }
     if(rename(temporary, version) != 0){
-        perror(version);
+        if(errno == EEXIST || errno == ENOTEMPTY){
+            fprintf(stderr, "error: v%d already exists\n", next);
+        }else{
+            perror(version);
+        }
         remove_tree(temporary);
         return 1;
     }
 
     if(meta_record(name, next, message, &stats) != 0){
-        fprintf(stderr, "warning: version saved, but the index was not updated\n");
+        fprintf(stderr, "warning: v%d was saved, but the index was not updated\n", next);
         fprintf(stderr, "run \"vmd info --rebuild\" to fix it\n");
     }
 
-    char size[32];
     human_size(stats.bytes, size, sizeof(size));
-    if(stats.skipped > 0){
-        printf("updated \"%s\" to v%d (%lu files, %s, %lu skipped by .vmdignore)\n",
+    if(next == 1){
+        printf("added \"%s\" as v1 (%lu files, %s)\n", name, stats.files, size);
+    }else if(stats.skipped > 0){
+        printf("updated \"%s\" to v%d (%lu files, %s, %lu skipped)\n",
                name, next, stats.files, size, stats.skipped);
     }else{
         printf("updated \"%s\" to v%d (%lu files, %s)\n", name, next, stats.files, size);

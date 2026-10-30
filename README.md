@@ -1,43 +1,134 @@
-# vmd (Local Version Control Tool)
+# vmd
 
-**vmd** is a lightweight, fast, and simple command-line version control system written in pure C. It is designed to help you manage and track project versions locally on your machine without the overhead of heavy version control systems.
+A small snapshot version control tool written in plain C.
 
----
+`vmd` copies a project folder into `~/vmd/projects` and gives it a number:
+`v1`, `v2`, `v3`, and so on. There is no repository, no server, and no
+dependency other than a C compiler and the standard C library.
 
-## Features
+This is the second version of the tool. It keeps the simple style of the
+first version and adds an index (`info`, `find`), messages, export, and
+`.vmdignore`. It deliberately does **not** use file locks or `fsync`.
 
-- 🚀 **Lightning Fast:** Written entirely in C with direct POSIX file system operations.
-- 📂 **Local Storage:** Automatically organizes and stores project snapshots in `~/vmd/projects`.
-- 🔢 **Automatic Versioning:** Easily increment versions (`v1`, `v2`, `v3`...) with a single command.
-- 📦 **Export Capabilities:** Export any specific version of a project to any target directory.
-- 🗑️ **Flexible Cleanup:** Delete specific versions, entire projects, or clear all data easily.
-- 📋 **Listing Support:** View all tracked projects or inspect available versions for a specific project.
+## Build
 
----
+With make:
 
-## Commands Reference
+```sh
+make
+```
 
-| Command | Description |
+Or directly:
+
+```sh
+cc -std=c11 -O2 -Wall -Wextra *.c -o vmd
+```
+
+`./installation.sh` builds the binary and installs it in `~/.local/bin`.
+
+## Commands
+
+| Command | What it does |
 | :--- | :--- |
-| `vmd add <project_name>` | Run inside your project folder. Saves the current state as version 1 (`v1`). |
-| `vmd up <project_name>` | Run inside your project folder. Saves the current state as the next version (`v2`, `v3`, ...). |
-| `vmd imp <name> <version> <path>` | Exports a specific version to a target folder named `vmd-<project>_v-<version>`. |
-| `vmd list` | Lists all tracked projects. |
-| `vmd list <project_name>` | Lists all saved versions of a specific project. |
-| `vmd rm <project_name>` | Removes the project and all its versions. |
-| `vmd rm <project_name> <version>` | Removes only a specific version of a project. |
-| `vmd rm <project_name> all` | Removes all versions of a specific project. |
-| `vmd rm all` | Completely clears and removes every saved project. |
-| `vmd help` | Displays the help menu and usage guide. |
+| `vmd add <project> [message]` | Save the current folder as `v1`. |
+| `vmd up <project> [message]` | Save the current folder as the next version. |
+| `vmd imp <project> <version> <dir>` | Export a version to `<dir>/vmd-<project>_v-<version>`. |
+| `vmd list` | List projects with their version count and last date. |
+| `vmd list <project>` | List the versions of one project. |
+| `vmd info` | Show the index path and summary. |
+| `vmd info <project> [version]` | Show dates, sizes and messages from the index. |
+| `vmd info --rebuild` | Rebuild the index by scanning the saved folders. |
+| `vmd find <text>` | Search project names, versions and messages. |
+| `vmd rm <project> <version>` | Delete one version. |
+| `vmd rm <project> all` | Delete one project and all its versions (asks first). |
+| `vmd rm all` | Delete every saved project (asks first). |
+| `vmd help` | Show the built-in help. |
+| `vmd version` | Show the version of vmd. |
 
----
+`export` is an alias for `imp`, `log` for `info`, `search` for `find`, and
+`remove` for `rm`. `rm -y` and `rm --yes` skip the confirmation question.
 
-## Installation & Setup
+Deleting a whole history asks for confirmation. Without a terminal the
+question cannot be answered, so `--yes` is required there. `vmd rm <project>`
+without a version is refused on purpose: a forgotten argument must not delete
+a project.
 
-If you have an installation script (`install.sh`), you can set up the tool automatically:
+## Example
 
-1. Clone or download the repository.
-2. Run the installation script in your terminal:
-   ```bash
-   chmod +x install.sh
-   ./install.sh
+```sh
+cd ~/work/my-project
+vmd add my-project "first working version"
+# ... edit files ...
+vmd up my-project "add the parser"
+vmd list my-project
+vmd imp my-project 2 /tmp/export
+```
+
+## Storage
+
+```
+~/vmd/
+├── index.vmd                        one line per saved version
+└── projects/
+    └── vmd-<project>/
+        ├── v1/
+        ├── v2/
+        └── ...
+```
+
+The index line is:
+
+```
+project <tab> version <tab> epoch <tab> files <tab> bytes <tab> message
+```
+
+`add`, `up` and `rm` keep it up to date. `info` only reads the index, so it is
+fast; if the index is lost or the folders were changed by hand, run
+`vmd info --rebuild`.
+
+## Ignoring files
+
+Put a `.vmdignore` file in the folder you save. One pattern per line;
+`#` starts a comment.
+
+```
+.git
+*.o
+build/
+src/generated
+```
+
+- a pattern without `/` matches that name at any depth;
+- a pattern with `/` is relative to the saved folder;
+- a trailing `/` matches directories only.
+
+Ignored entries are not copied and are counted as `skipped`. Export copies a
+saved version exactly as it was stored, ignore rules do not apply there.
+
+## Copy behavior
+
+- Files are copied with `open`/`read`/`write`; no shell command is used.
+- Permission bits are kept, symbolic links are recreated as links, and
+  special files are skipped with a warning.
+- A snapshot is written into a hidden `.vN.tmp.XXXXXX` folder inside the
+  project and renamed to `vN` only when the copy is complete. An interrupted
+  copy therefore never appears as a finished version.
+- Two different processes writing the same project at the same time are not
+  coordinated: run one `vmd` command at a time.
+- Files are not flushed with `fsync`: after a power loss the newest version
+  may be incomplete or missing. The tool is meant for local, everyday
+  snapshots, not for backups.
+
+## Layout of the source
+
+| File | Purpose |
+| :--- | :--- |
+| `vmd.c` | command line parsing and dispatch |
+| `add.c`, `up.c` | save the current folder as v1 / the next version |
+| `imp.c` | export one version |
+| `list.c`, `info.c` | listing and index queries (`info`, `find`) |
+| `rm.c` | delete a version, a project, or everything |
+| `index.c` | read, write and rebuild `~/vmd/index.vmd` |
+| `util.c` | names, paths, copying, deleting, formatting |
+| `help.c` | the help text |
+| `vmd.h` | shared types and function declarations |

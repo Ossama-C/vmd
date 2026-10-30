@@ -8,26 +8,25 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-#include "imp.h"
-#include "util.h"
+#include "vmd.h"
 
 /*
- * Export one stored version into a destination folder.
- * Copies into a temporary folder first, refuses unsafe or self-referential
- * targets, and replaces an existing export only after the copy succeeds.
+ * Export one saved version into <destination>/vmd-<project>_v-<version>.
+ *
+ * The copy goes to a temporary folder next to the target and is renamed at
+ * the end. An older export with the same name is replaced as a whole.
  */
 int imp(const char *name, int version, const char *destination){
     const char *home = vmd_home();
     char source[PATH_MAX];
     char source_real[PATH_MAX];
     char destination_real[PATH_MAX];
-    char destination_final[PATH_MAX];
     char target[PATH_MAX];
     char temporary[PATH_MAX];
     struct stat info;
-    copy_stats stats = {0};
-    const char *separator;
+    vmd_stats stats = {0};
     int replacing = 0;
+    char size[32];
 
     if(home == NULL){
         fprintf(stderr, "error: HOME is not set\n");
@@ -37,19 +36,10 @@ int imp(const char *name, int version, const char *destination){
         fprintf(stderr, "error: invalid project name\n");
         return 1;
     }
-    if(version <= 0){
-        fprintf(stderr, "error: the version must be a positive number\n");
-        return 1;
-    }
     if(destination == NULL || destination[0] == '\0'){
         fprintf(stderr, "error: the destination path is empty\n");
         return 1;
     }
-    if(strlen(destination) >= PATH_MAX){
-        fprintf(stderr, "error: the destination path is too long\n");
-        return 1;
-    }
-
     if(build_path(source, sizeof(source), "%s/vmd/projects/vmd-%s/v%d",
                   home, name, version) != 0){
         fprintf(stderr, "error: path is too long\n");
@@ -64,29 +54,21 @@ int imp(const char *name, int version, const char *destination){
         return 1;
     }
 
-    if(resolve_path(destination, destination_real, sizeof(destination_real)) != 0){
-        fprintf(stderr, "error: could not resolve the destination path\n");
+    if(mkdir_p(destination, 0755) != 0){
+        perror(destination);
+        return 1;
+    }
+    if(realpath(destination, destination_real) == NULL){
+        perror(destination);
         return 1;
     }
     if(is_inside(destination_real, source_real)){
         fprintf(stderr, "error: you cannot export a version into itself\n");
         return 1;
     }
-    if(mkdir_p(destination_real, 0755) != 0){
-        perror(destination_real);
-        return 1;
-    }
-    if(realpath(destination_real, destination_final) == NULL){
-        perror("realpath");
-        return 1;
-    }
-    if(is_inside(destination_final, source_real)){
-        fprintf(stderr, "error: you cannot export a version into itself\n");
-        return 1;
-    }
-    separator = strcmp(destination_final, "/") == 0 ? "" : "/";
     if(build_path(target, sizeof(target), "%s%svmd-%s_v-%d",
-                  destination_final, separator, name, version) != 0){
+                  destination_real, strcmp(destination_real, "/") == 0 ? "" : "/",
+                  name, version) != 0){
         fprintf(stderr, "error: the destination path is too long\n");
         return 1;
     }
@@ -120,7 +102,7 @@ int imp(const char *name, int version, const char *destination){
         return 1;
     }
     if(replacing && remove_tree(target) != 0){
-        fprintf(stderr, "error: could not replace the existing export %s\n", target);
+        fprintf(stderr, "error: could not replace the old export %s\n", target);
         remove_tree(temporary);
         return 1;
     }
@@ -130,7 +112,6 @@ int imp(const char *name, int version, const char *destination){
         return 1;
     }
 
-    char size[32];
     human_size(stats.bytes, size, sizeof(size));
     printf("exported \"%s\" v%d to %s (%lu files, %s)%s\n",
            name, version, target, stats.files, size,
