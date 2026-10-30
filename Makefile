@@ -19,4 +19,7 @@ install: vmd
 clean:
 	rm -f vmd $(OBJECTS)
 
-.PHONY: install clean
+test: vmd
+	VMD=./vmd tests/test.sh
+
+.PHONY: install clean test

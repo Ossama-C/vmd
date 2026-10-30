@@ -49,6 +49,9 @@ int help(void){
     printf("  messages are optional and are stored in the index, not inside your project.\n");
     printf("  a copy is written to a hidden .vN.tmp.* folder and renamed to vN at the end,\n");
     printf("  so an interrupted copy never appears as a finished version.\n");
+    printf("  rm renames a version to a hidden name before deleting it, so an interrupted\n");
+    printf("  delete never leaves a half-removed version in the list.\n");
+    printf("  saved files and folders use mode 0777; setuid/setgid/sticky bits are not kept.\n");
     printf("  there are no locks: run one vmd command at a time on the same project.\n");
     printf("  there is no fsync: after a power loss the last write may be missing.\n");
     printf("  versions are full copies without checksums; \"info\" reports the file count and\n");
@@ -58,6 +61,10 @@ int help(void){
     printf("  examples: .git   *.o   node_modules/   src/generated\n");
     printf("  a pattern without '/' matches that name at any depth; with '/' it is relative to\n");
     printf("  the folder; a trailing '/' matches directories only. Ignored entries are counted\n");
-    printf("  as \"skipped\" and are not copied. Export (imp) always copies the version as-is.\n\n");
+    printf("  as \"skipped\" and are not copied. Export (imp) always copies the version as-is.\n");
+    printf("  \"!\" patterns are not supported and are skipped with a line-number warning.\n");
+    printf("  at most %d patterns; a longer list stops the save. Lines over %d characters\n",
+           VMD_PATTERNS, VMD_PATTERN_MAX - 1);
+    printf("  are skipped with a line-number warning.\n\n");
     return 0;
 }

@@ -6,9 +6,10 @@ A small snapshot version control tool written in plain C.
 `v1`, `v2`, `v3`, and so on. There is no repository, no server, and no
 dependency other than a C compiler and the standard C library.
 
-This is the second version of the tool. It keeps the simple style of the
-first version and adds an index (`info`, `find`), messages, export, and
-`.vmdignore`. It deliberately does **not** use file locks or `fsync`.
+This is version 2.1.0 of the tool. It keeps the simple style of the first
+version, adds an index (`info`, `find`), messages, export, and `.vmdignore`,
+and is checked by a small regression suite. It deliberately does **not** use
+file locks or `fsync`.
 
 ## Build
 
@@ -25,6 +26,21 @@ cc -std=c11 -O2 -Wall -Wextra *.c -o vmd
 ```
 
 `./installation.sh` builds the binary and installs it in `~/.local/bin`.
+
+## Tests
+
+```sh
+tests/test.sh
+```
+
+The script replaces `HOME` with a temporary directory in its first line, so
+the real `~/vmd` is never touched. The cleanup trap restores write permission
+before removing the sandbox, because several tests create read-only folders.
+
+The suite covers read-only trees and nested read-only trees on `rm`,
+`rm <project> all`, `rm all` continuing after a failure, symlink targets
+outside the tree, the 0777 snapshot mode, `.vmdignore` diagnostics, copy error
+messages, index updates, and export.
 
 ## Commands
 
@@ -105,14 +121,31 @@ src/generated
 Ignored entries are not copied and are counted as `skipped`. Export copies a
 saved version exactly as it was stored, ignore rules do not apply there.
 
+`!` (negation) is **not supported**. A line beginning with `!` is skipped and
+reported with its line number. A line longer than 255 characters is skipped
+with a warning too. At most 64 patterns are accepted; a longer list is an
+error and the save stops, because silently dropping a rule could copy a file
+that was meant to stay out of the snapshot.
+
 ## Copy behavior
 
 - Files are copied with `open`/`read`/`write`; no shell command is used.
-- Permission bits are kept, symbolic links are recreated as links, and
-  special files are skipped with a warning.
+- Every saved file and folder is stored with mode **0777**. vmd stores the
+  work, not the privileges: setuid, setgid and sticky bits are not kept, and
+  executable/read-only distinctions in the source are not reproduced.
+- Symbolic links are recreated as links. Special files (fifos, sockets,
+  devices) are skipped with a warning.
 - A snapshot is written into a hidden `.vN.tmp.XXXXXX` folder inside the
   project and renamed to `vN` only when the copy is complete. An interrupted
   copy therefore never appears as a finished version.
+- `rm` renames the version (or the whole project) to a hidden name in the
+  same folder first, updates the index, then deletes the files. An
+  interrupted delete therefore never leaves a half-removed version visible.
+  Read-only folders are made writable during deletion, but symbolic links are
+  never followed by that `chmod`.
+- Copy failures name the operation, the path and the reason (`open`, `read`,
+  `write`, `close`), so a full disk is distinguishable from a permission
+  problem.
 - Two different processes writing the same project at the same time are not
   coordinated: run one `vmd` command at a time.
 - Files are not flushed with `fsync`: after a power loss the newest version
@@ -132,3 +165,4 @@ saved version exactly as it was stored, ignore rules do not apply there.
 | `util.c` | names, paths, copying, deleting, formatting |
 | `help.c` | the help text |
 | `vmd.h` | shared types and function declarations |
+| `tests/test.sh` | regression suite with an isolated `HOME` |

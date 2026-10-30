@@ -157,28 +157,36 @@ int is_inside(const char *path, const char *dir){
 
 /*
  * Read .vmdignore from the folder being saved into a small fixed list.
+ *
+ * Bad lines are reported with their line number instead of disappearing:
+ * "!" is not supported, and a line that does not fit in VMD_PATTERN_MAX is
+ * skipped. When the file asks for more than VMD_PATTERNS patterns the save
+ * stops: silently dropping a rule could leave a secret in the snapshot.
  */
-static void ignore_load(vmd_ignore *rules, const char *root){
+static int ignore_load(vmd_ignore *rules, const char *root){
     char path[PATH_MAX];
     char line[VMD_PATTERN_MAX];
     FILE *file;
+    int line_number = 0;
 
     rules->count = 0;
     if(build_path(path, sizeof(path), "%s/.vmdignore", root) != 0){
-        return;
+        return 0;
     }
     file = fopen(path, "r");
     if(file == NULL){
-        return;
+        return 0;
     }
-    while(fgets(line, sizeof(line), file) != NULL && rules->count < VMD_PATTERNS){
+    while(fgets(line, sizeof(line), file) != NULL){
         char *start = line;
         size_t length;
 
+        line_number++;
         if(strchr(line, '\n') == NULL && feof(file) == 0){
             int c;
             while((c = fgetc(file)) != '\n' && c != EOF){
             }
+            fprintf(stderr, "warning: %s line %d is too long; skipped\n", path, line_number);
             continue;
         }
         while(*start == ' ' || *start == '\t'){
@@ -189,13 +197,25 @@ static void ignore_load(vmd_ignore *rules, const char *root){
                              start[length - 1] == ' ' || start[length - 1] == '\t')){
             start[--length] = '\0';
         }
-        if(length == 0 || start[0] == '#' || start[0] == '!'){
+        if(length == 0 || start[0] == '#'){
             continue;
+        }
+        if(start[0] == '!'){
+            fprintf(stderr, "warning: %s line %d: \"!\" patterns are not supported; skipped\n",
+                    path, line_number);
+            continue;
+        }
+        if(rules->count >= VMD_PATTERNS){
+            fprintf(stderr, "error: %s has more than %d patterns; refusing to save\n",
+                    path, VMD_PATTERNS);
+            fclose(file);
+            return -1;
         }
         snprintf(rules->pattern[rules->count], VMD_PATTERN_MAX, "%s", start);
         rules->count++;
     }
     fclose(file);
+    return 0;
 }
 
 /*
@@ -235,7 +255,18 @@ static int ignore_match(const vmd_ignore *rules, const char *relative, int is_di
 }
 
 /*
- * Copy one regular file, keeping its permission bits.
+ * Report a copy failure with the operation, the path, and the reason.
+ * It is called immediately where the error happens, before close/unlink
+ * can overwrite errno.
+ */
+static void copy_error(const char *action, const char *path){
+    fprintf(stderr, "error: cannot %s ", action);
+    perror(path);
+}
+
+/*
+ * Copy one regular file. Saved files use mode 0777: vmd stores the work,
+ * not the privileges (setuid/setgid/sticky bits are deliberately dropped).
  */
 static int copy_file(const char *src, const char *dst, const struct stat *info, vmd_stats *stats){
     char buffer[COPY_BUFFER];
@@ -246,10 +277,12 @@ static int copy_file(const char *src, const char *dst, const struct stat *info, 
     ssize_t got;
 
     if(in < 0){
+        copy_error("open", src);
         return -1;
     }
-    out = open(dst, O_WRONLY | O_CREAT | O_TRUNC, info->st_mode & 07777);
+    out = open(dst, O_WRONLY | O_CREAT | O_TRUNC, 0777);
     if(out < 0){
+        copy_error("create", dst);
         close(in);
         return -1;
     }
@@ -260,7 +293,14 @@ static int copy_file(const char *src, const char *dst, const struct stat *info, 
         total += (unsigned long long)got;
         while(left > 0){
             ssize_t wrote = write(out, cursor, (size_t)left);
-            if(wrote <= 0){
+            if(wrote < 0){
+                copy_error("write to", dst);
+                failed = 1;
+                break;
+            }
+            if(wrote == 0){
+                errno = EIO;
+                copy_error("write to", dst);
                 failed = 1;
                 break;
             }
@@ -271,10 +311,20 @@ static int copy_file(const char *src, const char *dst, const struct stat *info, 
             break;
         }
     }
-    if(got < 0 || fchmod(out, info->st_mode & 07777) != 0){
+    if(got < 0){
+        copy_error("read", src);
         failed = 1;
     }
-    if(close(in) != 0 || close(out) != 0){
+    if(!failed && fchmod(out, 0777) != 0){
+        copy_error("set permissions on", dst);
+        failed = 1;
+    }
+    if(close(in) != 0){
+        copy_error("close", src);
+        failed = 1;
+    }
+    if(close(out) != 0){
+        copy_error("close", dst);
         failed = 1;
     }
     if(failed){
@@ -297,10 +347,12 @@ static int copy_link(const char *src, const char *dst, vmd_stats *stats){
     ssize_t length = readlink(src, target, sizeof(target) - 1);
 
     if(length < 0){
+        copy_error("read link", src);
         return -1;
     }
     target[length] = '\0';
     if(symlink(target, dst) != 0){
+        copy_error("create link", dst);
         return -1;
     }
     stats->files++;
@@ -374,7 +426,7 @@ static int copy_tree_inner(const char *src, const char *dst, const char *relativ
             }
         }
         closedir(dir);
-        if(chmod(dst, info.st_mode & 07777) != 0){
+        if(chmod(dst, 0777) != 0){
             perror(dst);
             return -1;
         }
@@ -415,7 +467,9 @@ int copy_project(const char *src, const char *dst, vmd_stats *stats){
         errno = ENOTDIR;
         return -1;
     }
-    ignore_load(&rules, src);
+    if(ignore_load(&rules, src) != 0){
+        return -1;
+    }
     return copy_tree_inner(src, dst, "", &rules, stats, 0);
 }
 
@@ -430,13 +484,72 @@ static int remove_entry(const char *path, const struct stat *info, int type, str
 }
 
 /*
+ * Make one real directory writable by its owner. Symbolic links are never
+ * touched: chmod follows them and would change a target outside the tree.
+ * Returns 1 when the mode actually changed, so an unreadable directory can
+ * be scanned again without risking a loop.
+ */
+static int unlock_directory(const char *path){
+    struct stat current;
+    int fd;
+    int changed;
+
+    if(lstat(path, &current) != 0 || S_ISDIR(current.st_mode) == 0){
+        return 0;
+    }
+    changed = (current.st_mode & 0700) != 0700;
+    fd = open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
+    if(fd >= 0){
+        if(fchmod(fd, 0700) != 0){
+            close(fd);
+            return 0;
+        }
+        close(fd);
+        return changed;
+    }
+    if(errno != EACCES && errno != EPERM){
+        return 0;
+    }
+    if(chmod(path, 0700) != 0){
+        return 0;
+    }
+    return changed;
+}
+
+/*
+ * First nftw pass: give every directory write permission before the delete
+ * pass visits its children. It runs without FTW_DEPTH, so parents come
+ * first. FTW_DNR means nftw could not read the directory at all; after the
+ * chmod it is scanned again so nested unreadable folders are unlocked too.
+ */
+static int unlock_entry(const char *path, const struct stat *info, int type, struct FTW *walk){
+    (void)info;
+    (void)walk;
+    if(type != FTW_D && type != FTW_DP && type != FTW_DNR){
+        return 0;
+    }
+    if(unlock_directory(path) && type == FTW_DNR){
+        (void)nftw(path, unlock_entry, 64, FTW_PHYS);
+    }
+    return 0;
+}
+
+/*
  * Delete a file or a whole directory tree.
+ *
+ * The first pass repairs directory permissions (a snapshot can contain
+ * read-only folders), then the second pass removes everything. Doing the
+ * chmod in the FTW_DEPTH handler would be too late: children are visited
+ * before their parent, so their entries could not be unlinked.
  */
 int remove_tree(const char *path){
     struct stat info;
 
     if(lstat(path, &info) != 0){
         return errno == ENOENT ? 0 : -1;
+    }
+    if(S_ISDIR(info.st_mode)){
+        (void)nftw(path, unlock_entry, 64, FTW_PHYS);
     }
     return nftw(path, remove_entry, 64, FTW_DEPTH | FTW_PHYS) == 0 ? 0 : -1;
 }

@@ -5,7 +5,7 @@
 #include <sys/types.h>
 #include <time.h>
 
-#define VMD_VERSION "2.0.0"
+#define VMD_VERSION "2.1.0"
 #define VMD_NAME_MAX 64
 #define VMD_MSG_MAX 200
 #define VMD_PATTERN_MAX 256
